@@ -1,10 +1,11 @@
 from passlib.context import CryptContext
-from sqlalchemy.orm import Session
-from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate
 from fastapi import HTTPException
-from typing import Dict, Any, List
+from app.models.user import User, User_Pydantic
+from typing import List
 from datetime import datetime
+import random
+import string
+from tortoise.exceptions import IntegrityError
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -14,88 +15,72 @@ def get_password_hash(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
-def get_user_by_email(db: Session, email: str):
-    return db.query(User).filter(User.email == email).first()
+async def get_user_by_email(email: str) -> User:
+    return await User.get_or_none(email=email)
 
-def get_user_by_username(db: Session, username: str):
-    return db.query(User).filter(User.username == username).first()
+async def get_user_by_username(username: str) -> User:
+    return await User.get_or_none(username=username)
 
-def _user_to_dict(user: User) -> Dict[str, Any]:
-    """Convert SQLAlchemy User model to dictionary"""
-    return {
-        "id": user.id,
-        "email": user.email,
-        "username": user.username,
-        "full_name": user.full_name,
-        "is_active": user.is_active,
-        "is_superuser": user.is_superuser,
-        "created_at": user.created_at,
-        "updated_at": user.updated_at
-    }
+async def create_user(user_data: dict) -> User_Pydantic:
+    """Create a new user"""
+    try:
+        user = await User.create(**user_data)
+        return await User_Pydantic.from_tortoise_orm(user)
+    except IntegrityError as e:
+        if "email" in str(e):
+            raise ValueError("Email already exists")
+        elif "username" in str(e):
+            raise ValueError("Username already exists")
+        raise e
 
-def get_all_users(db: Session) -> Dict[str, Any]:
-    """Get all users from the database"""
-    users = db.query(User).all()
-    return {
-        "status": "success",
-        "message": "Users retrieved successfully",
-        "data": [_user_to_dict(user) for user in users]
-    }
+async def get_all_users() -> list[User_Pydantic]:
+    """Get all users"""
+    return await User_Pydantic.from_queryset(User.all())
 
-def create_user(db: Session, user: UserCreate) -> Dict[str, Any]:
-    # Check if user with email exists
-    if get_user_by_email(db, user.email):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Check if user with username exists
-    if get_user_by_username(db, user.username):
-        raise HTTPException(status_code=400, detail="Username already taken")
-    
-    hashed_password = get_password_hash(user.password)
-    db_user = User(
-        email=user.email,
-        username=user.username,
-        hashed_password=hashed_password,
-        full_name=user.full_name
-    )
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    
-    return {
-        "status": "success",
-        "message": "User registered successfully",
-        "data": _user_to_dict(db_user)
-    }
+async def get_user(user_id: int) -> User_Pydantic:
+    """Get a user by ID"""
+    user = await User.get_or_none(id=user_id)
+    if not user:
+        raise ValueError("User not found")
+    return await User_Pydantic.from_tortoise_orm(user)
 
-def get_user(db: Session, user_id: int) -> Dict[str, Any]:
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    return {
-        "status": "success",
-        "message": "User retrieved successfully",
-        "data": _user_to_dict(db_user)
-    }
+async def update_user(user_id: int, user_data: dict) -> User_Pydantic:
+    """Update a user"""
+    user = await User.get_or_none(id=user_id)
+    if not user:
+        raise ValueError("User not found")
 
-def update_user(db: Session, user_id: int, user: UserUpdate) -> Dict[str, Any]:
-    db_user = db.query(User).filter(User.id == user_id).first()
-    if not db_user:
-        raise HTTPException(status_code=404, detail="User not found")
+    # Check for unique constraints
+    if "email" in user_data:
+        existing_user = await User.get_or_none(email=user_data["email"])
+        if existing_user and existing_user.id != user_id:
+            raise ValueError("Email already exists")
+
+    if "username" in user_data:
+        existing_user = await User.get_or_none(username=user_data["username"])
+        if existing_user and existing_user.id != user_id:
+            raise ValueError("Username already exists")
+
+    # Update user
+    await user.update_from_dict(user_data).save()
+    return await User_Pydantic.from_tortoise_orm(user)
+
+async def generate_otp(user_id: int, email: str) -> str:
+    """
+    Generate a 5-digit alphanumeric OTP.
     
-    update_data = user.model_dump(exclude_unset=True)
-    if "password" in update_data:
-        update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
+    Args:
+        user_id: ID of the user
+        email: Email address of the user
+        
+    Returns:
+        str: The generated OTP
+    """
+    # Generate a 5-digit alphanumeric OTP
+    characters = string.ascii_letters + string.digits
+    otp = ''.join(random.choices(characters, k=5))
     
-    for field, value in update_data.items():
-        setattr(db_user, field, value)
+    # TODO: Implement OTP storage with Tortoise ORM
+    # This will need a new OTP model using Tortoise ORM
     
-    db.commit()
-    db.refresh(db_user)
-    
-    return {
-        "status": "success",
-        "message": "User updated successfully",
-        "data": _user_to_dict(db_user)
-    }
+    return otp

@@ -1,23 +1,67 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+from tortoise import Tortoise
+from tortoise.contrib.fastapi import register_tortoise
+import ssl
 
-# Get database URL from environment variable or use default
-SQLALCHEMY_DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost/summit_db"
-)
+# Load environment variables from .env file
+env_path = Path(__file__).parent.parent / 'app/.env'
+load_dotenv(dotenv_path=env_path)
 
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Database configuration components
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_NAME = os.getenv("DB_NAME", "summit_db")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
-Base = declarative_base()
+print('DB_USER:', DB_USER)
 
-# Dependency
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close() 
+# Create SSL context
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+# Database URL for Tortoise ORM
+TORTOISE_ORM = {
+    "connections": {
+        "default": {
+            "engine": "tortoise.backends.asyncpg",
+            "credentials": {
+                "host": DB_HOST,
+                "port": int(DB_PORT),
+                "user": DB_USER,
+                "password": DB_PASSWORD,
+                "database": DB_NAME,
+                "ssl": ssl_context if DB_SSL_MODE == "require" else None
+            }
+        }
+    },
+    "apps": {
+        "models": {
+            "models": ["aerich.models", "app.models.user"],
+            "default_connection": "default",
+        },
+    },
+}
+
+async def init_db():
+    """Initialize database connection"""
+    await Tortoise.init(config=TORTOISE_ORM)
+    # Create tables if they don't exist
+    await Tortoise.generate_schemas()
+
+async def close_db():
+    """Close database connection"""
+    await Tortoise.close_connections()
+
+# Function to register Tortoise ORM with FastAPI
+def register_db(app):
+    register_tortoise(
+        app,
+        config=TORTOISE_ORM,
+        generate_schemas=True,
+        add_exception_handlers=True,
+    ) 
