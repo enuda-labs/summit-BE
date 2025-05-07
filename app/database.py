@@ -17,6 +17,14 @@ DB_NAME = os.getenv("DB_NAME", "summit_db")
 DB_PORT = os.getenv("DB_PORT", "5432")
 DB_SSL_MODE = os.getenv("DB_SSL_MODE", "require")
 
+# Test database configuration
+TEST_DB_NAME = os.getenv("TEST_DB_NAME", "summit_test_db")
+TEST_DB_HOST = os.getenv("TEST_DB_HOST", "localhost")
+TEST_DB_PORT = os.getenv("TEST_DB_PORT", "5432")
+TEST_DB_USER = os.getenv("TEST_DB_USER", "postgres")
+TEST_DB_PASSWORD = os.getenv("TEST_DB_PASSWORD", "postgres")
+TEST_DB_SSL_MODE = os.getenv("TEST_DB_SSL_MODE", "disable")
+
 print('DB_USER:', DB_USER)
 
 # Create SSL context
@@ -36,6 +44,17 @@ TORTOISE_ORM = {
                 "password": DB_PASSWORD,
                 "database": DB_NAME,
                 "ssl": ssl_context if DB_SSL_MODE == "require" else None
+            }
+        },
+        "test": {
+            "engine": "tortoise.backends.asyncpg",
+            "credentials": {
+                "host": TEST_DB_HOST,
+                "port": int(TEST_DB_PORT),
+                "user": TEST_DB_USER,
+                "password": TEST_DB_PASSWORD,
+                "database": TEST_DB_NAME,
+                "ssl": ssl_context if TEST_DB_SSL_MODE == "require" else None
             }
         }
     },
