@@ -37,11 +37,6 @@ class UserSubscription(models.Model):
         subscription = await UserSubscription.filter(user=self.user).first()
         return subscription.subscription_plan if subscription else None
 
-    # Check if user's subscription is active
-    @property
-    async def is_active(self):
-        return self.end_date is None or self.end_date > fields.DatetimeField.now()
-
     # Check if user's subscription is expired
     @property
     async def is_expired(self):

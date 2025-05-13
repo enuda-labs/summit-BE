@@ -4,6 +4,7 @@ from typing import List
 from app.services import sub_process as subscription_service
 from fastapi import Request
 
+
 router = APIRouter()
 
 @router.post("/create-subscription/{user_id}/{plan}/{frequency}")
@@ -19,3 +20,8 @@ async def stripe_webhook(request: Request):
 @router.get("/get-subscription-by-user-id/{user_id}")
 async def get_subscription_by_user_id(user_id: int):
     return await subscription_service.get_subscription_by_user_id(user_id)
+
+
+@router.post("/cancel-subscription/{user_id}")
+async def cancel_subscription(user_id: int):
+    return await subscription_service.cancel_subscription(user_id)

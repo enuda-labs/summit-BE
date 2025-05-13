@@ -9,7 +9,7 @@ import json
 import logging
 from datetime import datetime
 from app.models.user import User
-from app.models.subscription import UserSubscription
+from app.models.subscription import UserSubscription, Quota
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -153,6 +153,7 @@ async def stripe_webhook(request: Request):
                     price = float(stripe_subscription['items']['data'][0]['price']['unit_amount']) / 100  # Convert from cents to dollars
                     
                     logger.info("Creating/updating subscription record...")
+
                     # Create or update subscription
                     await UserSubscription.update_or_create(
                         user=user_id,
@@ -189,8 +190,54 @@ async def stripe_webhook(request: Request):
         logger.error(f"General webhook processing error: {str(e)}")
         logger.exception("Full traceback:")
         raise HTTPException(status_code=500, detail=f"General error: {str(e)}")
+
+async def cancel_subscription(user_id: int):
+    """
+    Cancel a user's subscription.
     
+    Args:
+        user_id (int): The ID of the user
+        
+    Returns:
+        dict: A dictionary containing the status of the cancellation
+    """
+    try:
+        # Get the subscription record for the user
+        subscription = await UserSubscription.filter(user=str(user_id)).first()
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+            
+        # Cancel the subscription on stripe
+        try:
+            if subscription.stripe_subscription_id:
+                try:
+                    stripe.Subscription.cancel(subscription.stripe_subscription_id)
+                except stripe.error.InvalidRequestError as e:
+                    if "No such subscription" in str(e):
+                        logger.warning(f"Stripe subscription {subscription.stripe_subscription_id} not found - marking as cancelled locally")
+                    else:
+                        raise
+            else:
+                logger.warning("No Stripe subscription ID found - marking as cancelled locally")
+                
+            
+            subscription.is_active=False
+            await subscription.save()
+            return {
+                "status": "success", 
+                "message": "Subscription cancelled successfully"
+                }
+        except Exception as e:
+            logger.error(f"Error cancelling subscription on stripe: {str(e)}")
+            logger.exception("Full traceback:")
+            raise HTTPException(status_code=500, detail=f"Error cancelling subscription on stripe: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error cancelling subscription: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=f"Error cancelling subscription: {str(e)}")
     
+
+
 async def get_subscription_by_user_id(user_id: int):
     """
     Get a user's subscription by user ID.
@@ -224,3 +271,34 @@ async def get_subscription_by_user_id(user_id: int):
         logger.error(f"Error getting subscription by user ID: {str(e)}")
         logger.exception("Full traceback:")
         raise HTTPException(status_code=500, detail=f"Error getting subscription by user ID: {str(e)}")
+
+
+async def manage_quotas(user_id: int):
+    """
+    Manage quotas for a user.
+    """
+    try:
+        # Get the subscription record for the user
+        subscription = await UserSubscription.filter(user=str(user_id)).first()
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        
+        # Get the quota record for the user
+        quota = await Quota.filter(user=str(user_id)).first()
+        if not quota:
+            # Create a new quota record
+            quota = Quota(
+                user=str(user_id),
+                total=subscription.price,
+                used=0
+            )
+            await quota.save()
+        
+        # Update the quota
+        quota.total = subscription.price
+        quota.used = 0
+        await quota.save()
+    except Exception as e:
+        logger.error(f"Error managing quotas: {str(e)}")
+        logger.exception("Full traceback:")
+        raise HTTPException(status_code=500, detail=f"Error managing quotas: {str(e)}")
