@@ -30,7 +30,7 @@ async def create_subscription(user_id: int, plan: str, frequency: str = "monthly
     
     Args:
         user_id (int): The ID of the user
-        plan (str): The subscription plan (e.g., 'light', 'pro', 'enterprise')
+        plan (str): The subscription plan (e.g., 'light', 'pro', 'standard')
         frequency (str): The billing frequency ('monthly' or 'yearly')
         
     Returns:
@@ -168,6 +168,15 @@ async def stripe_webhook(request: Request):
                         }
                     )
                     logger.info(f"Subscription successfully updated for user {user_id}")
+
+                    # Manage User Quota
+                    try:
+                        logger.info(f"Managing user quota for user {user_id}")
+                        await manage_quotas(user_id)
+                    except Exception as e:
+                        logger.error(f"Error managing user quota: {str(e)}")
+                        logger.exception("Full traceback:")
+                        raise HTTPException(status_code=500, detail=f"Error managing user quota: {str(e)}")
                     
                 except Exception as e:
                     logger.error(f"Database update error: {str(e)}")
@@ -253,6 +262,11 @@ async def get_subscription_by_user_id(user_id: int):
         subscription = await UserSubscription.filter(user=str(user_id)).first()
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
+        
+        # Get the quota record for the user
+        quota = await Quota.filter(user=str(user_id)).first()
+        if not quota:
+            raise HTTPException(status_code=404, detail="Quota not found")
             
         # Convert to dict using Tortoise's serialization
         return {
@@ -264,6 +278,7 @@ async def get_subscription_by_user_id(user_id: int):
             "start_date": subscription.start_date.isoformat() if subscription.start_date else None,
             "end_date": subscription.end_date.isoformat() if subscription.end_date else None,
             "stripe_subscription_id": str(subscription.stripe_subscription_id) if subscription.stripe_subscription_id else None,
+            "quota": quota.total
         }
 
         
@@ -275,7 +290,13 @@ async def get_subscription_by_user_id(user_id: int):
 
 async def manage_quotas(user_id: int):
     """
-    Manage quotas for a user.
+    Manage quotas for a user based on their subscription plan.
+    
+    Quota limits:
+    - Light: 2000 units
+    - Standard: 5000 units
+    - Premium: 12000 units
+    - Free: 100 units
     """
     try:
         # Get the subscription record for the user
@@ -283,21 +304,49 @@ async def manage_quotas(user_id: int):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
         
+        # Define quota limits based on subscription plan
+        quota_limits = {
+            "light": 2000,
+            "standard": 5000,
+            "premium": 12000,
+            "free": 100
+        }
+        
+        # Get the quota limit for the subscription plan
+        quota_limit = quota_limits.get(subscription.subscription_plan.lower())
+        if not quota_limit:
+            raise HTTPException(status_code=400, detail=f"Invalid subscription plan: {subscription.subscription_plan}")
+        
         # Get the quota record for the user
         quota = await Quota.filter(user=str(user_id)).first()
         if not quota:
             # Create a new quota record
             quota = Quota(
                 user=str(user_id),
-                total=subscription.price,
+                total=quota_limit,
                 used=0
             )
             await quota.save()
+            logger.info(f"Created new quota for user {user_id} with limit {quota_limit}")
+        else:
+            # Update the quota
+            quota.total = quota_limit
+            # Only reset used quota if subscription plan changed
+            if quota.total != quota_limit:
+                quota.used = 0
+            await quota.save()
+            logger.info(f"Updated quota for user {user_id} to limit {quota_limit}")
+            
+        return {
+            "status": "success",
+            "message": "Quota managed successfully",
+            "quota": {
+                "total": quota.total,
+                "used": quota.used,
+                "remaining": quota.total - quota.used
+            }
+        }
         
-        # Update the quota
-        quota.total = subscription.price
-        quota.used = 0
-        await quota.save()
     except Exception as e:
         logger.error(f"Error managing quotas: {str(e)}")
         logger.exception("Full traceback:")
